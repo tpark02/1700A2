@@ -1,0 +1,728 @@
+﻿using System;
+using System.Collections;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Text;
+using System.IO.Ports;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using static System.Net.Mime.MediaTypeNames;
+
+namespace _1700A_GUI
+{
+    public partial class Form1 : Form
+    {
+        int cnt = 1;
+        string currentLine = string.Empty;
+        StringBuilder sb = new StringBuilder();
+        string commandinput = string.Empty;
+        private ConcurrentQueue<string> q = new ConcurrentQueue<string>();
+        ConcurrentQueue<Tuple<string, string>> tq = new ConcurrentQueue<Tuple<string, string>>();
+        bool[] modeonoff = new bool[] { false, false, false, false, false, false, false, false };
+        int delay = 100;
+        bool isIP = false, isCom = true;
+        TcpClient client = null;
+        bool isIPstart = false;
+        enum mode
+        {
+            CM1_RUN = 0, CM2_RUN = 1, PS1_RUN = 2, PS2_RUN = 3, CM1_MODE = 4, CM2_MODE = 5, PS1_MODE = 6, PS2_MODE = 7
+        }
+
+        string[] displaycmd = new string[] { "cm#:run?", "ps#:run?", "cm#:mode?", "ps#:mode?", "ALL:MEAS?" };
+        public Form1()
+        {
+            InitializeComponent();
+
+            cmText.Text = "-.--- - mA";
+            //wattText.Text = "-.--- - mW" + Environment.NewLine;
+            //wattText.Text += Environment.NewLine;
+            //wattText.Text += "--.--- -- V" + Environment.NewLine;
+            //wattText.Text += Environment.NewLine;
+            //wattText.Text += "-.--- - mA";
+
+            connect_button.Enabled = true;
+            disconnect_button.Enabled = false;
+
+            numpadTextBox.Text = string.Empty;
+
+            PlotController.f = this;
+
+            PlotController.init();
+        }
+        private void runLoop()
+        {
+            Task.Factory.StartNew(async () =>
+            {               
+                while (serialPort.IsOpen)
+                {
+                    try
+                    {                        
+                        Tuple<string, string> p = null;
+
+                        while (!tq.IsEmpty)
+                        {
+                            tq.TryDequeue(out p);                              
+
+                            if (p != null)
+                            {
+                                q.Enqueue(p.Item1 + "\r");
+
+                                if (serialPort.IsOpen)
+                                {
+                                    Console.WriteLine("sent : " + p.Item1);
+                                    serialPort.Write(p.Item2 + "\r");
+                                }
+                                    
+                                await Task.Delay(delay);
+                                p = null;
+                            }
+                        }                      
+                        Console.WriteLine("thread running");
+
+                        if (tq.IsEmpty)
+                        {
+                            foreach (string d in displaycmd)
+                            {
+                                string cmd = d.Replace('#', '1');
+                                tq.Enqueue(new Tuple<string, string>(cmd, cmd));
+                            }
+                        }                        
+                    }
+                    catch (Exception ex)
+                    {
+                        Util.showPopup(this, ex.ToString());
+                    }
+                }
+               
+            });
+        }
+
+        void sendIP()
+        {
+            if (!commandInput.Text.Equals(""))
+            {
+                Task.Factory.StartNew(async () =>
+                {
+                    string message = "CMD;" + commandInput.Text + '\r';
+                    q.Enqueue(message);
+                });
+            }
+        }
+        private void commandSend_Click(object sender, EventArgs e)
+        {
+            if (!connect_button.Enabled)
+            {
+                if (isCom)
+                {
+                    tq.Enqueue(new Tuple<string, string>("output", commandInput.Text));
+                }
+                else if (isIP)
+                {
+                    sendIP();
+                }
+            }
+            else
+            {
+                Util.showPopup(this, "Please connect first");
+            }
+        }
+        void startCOM()
+        {
+            if (!serialPort.IsOpen)  //시리얼포트가 열려 있지 않으면
+            {
+                serialPort.PortName = comboBox_port.Text;  //콤보박스의 선택된 COM포트명을 시리얼포트명으로 지정
+                serialPort.BaudRate = 115200;  //보레이트 변경이 필요하면 숫자 변경하기
+                serialPort.DataBits = 8;
+                serialPort.StopBits = StopBits.One;
+                serialPort.Parity = Parity.None;
+                serialPort.NewLine = "\r";
+                serialPort.DataReceived += new SerialDataReceivedEventHandler(serialPort_DataReceived); //이것이 꼭 필요하다
+
+                serialPort.Open();  //시리얼포트 열기
+
+                //label_status.Text = "포트가 열렸습니다.";
+                comboBox_port.Enabled = false;  //COM포트설정 콤보박스 비활성화
+                if (logBox.Text == "")
+                {
+                    logBox.AppendText("OPEN : " + serialPort.PortName, Color.Green);
+                }
+                else
+                {
+                    logBox.Text += Environment.NewLine;
+                    logBox.AppendText("OPEN : " + serialPort.PortName, Color.Green);
+                    logBox.ScrollToCaret();
+                }
+                //q = new ConcurrentQueue<string>();
+                //tq = new ConcurrentQueue<Tuple<string, string>>();
+                modeonoff = new bool[8];
+
+                sb.Clear();
+                cnt = 1;
+                currentLine = string.Empty;
+
+
+                //if (t == null)
+                {
+                    string temp = string.Empty;
+                    while (!q.IsEmpty)
+                        q.TryDequeue(out temp);
+
+                    Tuple<string, string> t = null;
+                    while (!tq.IsEmpty)
+                        tq.TryDequeue(out t);
+
+                    serialPort.DiscardInBuffer();
+                    serialPort.DiscardOutBuffer();
+
+                    connect_button.Enabled = false;
+                    disconnect_button.Enabled = true;
+                    runLoop();
+                    //PS<CH>:VOLT?
+                    string cmd = ("PS#:VOLT?").Replace('#', '1');                    
+                    tq.Enqueue(new Tuple<string, string>("VOLT", cmd));
+                }
+
+                PlotController.startGraph();
+            }
+            else  //시리얼포트가 열려 있으면
+            {
+                //label_status.Text = "포트가 이미 열려 있습니다.";                
+            }
+        }
+        private TaskScheduler _uiTaskScheduler;
+
+
+        async void loopIP()
+        {
+
+            isIPstart = true;
+            connect_button.Enabled = false;
+            disconnect_button.Enabled = true;
+            string message = "LOOP;ALL:MEAS?\r";
+            q.Enqueue(message);
+
+            while (isIPstart)
+            {
+                try
+                {
+                    string res = string.Empty;
+                    q.TryPeek(out res);
+
+                    var cmd = res.Split(';');
+
+                    Byte[] data = Encoding.UTF8.GetBytes(cmd[1]);
+                    NetworkStream stream = client.GetStream();
+                    stream.Write(data, 0, data.Length);
+                    Console.WriteLine("Sent: {0}", message);
+
+                    await Task.Delay(delay);
+                    // Receive the server response.
+                    // Buffer to store the response bytes.
+                    data = new Byte[256];
+                    // String to store the response ASCII representation.
+                    String responseData = String.Empty;
+
+                    // Read the first batch of the TcpServer response bytes.
+                    Int32 bytes = stream.Read(data, 0, data.Length);
+                    if (bytes <= 0)
+                    {
+                        continue;
+                    }
+                    responseData = Encoding.UTF8.GetString(data, 0, bytes);
+                    Console.WriteLine("Received: {0}", responseData);
+
+                    res = string.Empty;
+                    q.TryDequeue(out res);
+
+                    if (cmd[0] == "LOOP")
+                    {
+                        var arr = responseData.Split(',');
+                        if (mainPanel.InvokeRequired)
+                        {
+                            mainPanel.BeginInvoke(new Action(() =>
+                            {
+                                string str1 = double.Parse(arr[0]).ToString("F4") + " mA";
+                                str1 = str1[0] == '-' ? str1 : "  " + str1;
+                                cmText.Text = str1;
+
+                                double watt = (Double.Parse(arr[1]) * Double.Parse(arr[2]));
+                                setMainText(true, watt, arr[1], arr[2]);
+                            }));
+                        }
+                        else
+                        {
+                            string str1 = double.Parse(arr[0]).ToString("F4") + " mA";
+                            str1 = str1[0] == '-' ? str1 : "  " + str1;
+                            cmText.Text = str1;
+
+                            double watt = (Double.Parse(arr[1]) * Double.Parse(arr[2]));
+                            setMainText(true, watt, arr[1], arr[2]);
+                        }
+
+
+                        if (InvokeRequired)
+                        {
+                            Task uiTask = new Task(() => PlotController.executePlotCommand(responseData));
+                            uiTask.RunSynchronously(_uiTaskScheduler);
+                        }
+                        else
+                        {
+                            // Do async work
+                        }
+                    }
+                    else
+                    {
+                        if (logBox.InvokeRequired)
+                        {
+                            logBox.BeginInvoke(new Action(() =>
+                            {
+                                logBox.Text += Environment.NewLine;
+                                logBox.AppendText("CMD : " + commandInput.Text + Environment.NewLine);
+                                logBox.AppendText("RES : " + responseData.Substring(0, responseData.Length - 1), Color.Green);
+                                logBox.ScrollToCaret();
+                            }));
+                        }
+                        else
+                        {
+                            logBox.Text += Environment.NewLine;
+                            logBox.AppendText("CMD : " + commandInput.Text + Environment.NewLine);
+                            logBox.AppendText("RES : " + responseData.Substring(0, responseData.Length - 1), Color.Green);
+                            logBox.ScrollToCaret();
+                        }
+
+                    }
+                    q.Enqueue(message);
+                }
+                catch (Exception ex)
+                {
+                    //Util.showPopup(this, ex.ToString());
+                    return;
+                }
+            }
+
+        }
+        void startIP()
+        {
+            string ip = iptextbox.Text;
+            disconnect_button.Enabled = true;
+            connect_button.Enabled = false;
+            //send_button.Enabled = true;
+            _uiTaskScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+
+            Task.Factory.StartNew(async () =>
+            {
+                client = new TcpClient();
+                client.Connect(ip, 1001);
+                NetworkStream stream = client.GetStream();
+                await Task.Delay(300);
+
+                // String to store the response ASCII representation.
+                String responseData = String.Empty;
+                Byte[] data = data = new Byte[256];
+                // Read the first batch of the TcpServer response bytes.
+                Int32 bytes = stream.Read(data, 0, data.Length);
+                responseData = System.Text.Encoding.ASCII.GetString(data, 0, bytes);
+                Console.WriteLine("Received: {0}", responseData);
+
+                string temp = string.Empty;
+                while (!q.IsEmpty)
+                    q.TryDequeue(out temp);
+
+                Tuple<string, string> t = null;
+                while (!tq.IsEmpty)
+                    tq.TryDequeue(out t);
+
+
+                if (InvokeRequired)
+                {
+                    Task uiTask = new Task(() => PlotController.startGraph());
+                    uiTask.RunSynchronously(_uiTaskScheduler);
+                }
+                else
+                {
+                    // Do async work
+                }
+               
+                loopIP();
+            });
+        }
+        private void button_connect_Click(object sender, EventArgs e)  //통신 연결하기 버튼
+        {
+            if (isCom)
+            {
+                startCOM();
+            }
+            else if (isIP)
+            {
+                startIP();
+            }
+        }
+        private void serialPort_DataReceived(object sender, SerialDataReceivedEventArgs e)  //수신 이벤트가 발생하면 이 부분이 실행된다.
+        {
+            this.Invoke(new EventHandler(serialRecv));  //메인 쓰레드와 수신 쓰레드의 충돌 방지를 위해 Invoke 사용. MySerialReceived로 이동하여 추가 작업 실행.
+        }
+        
+        private void serialRecv(object s, EventArgs e)  //여기에서 수신 데이타를 사용자의 용도에 따라 처리한다.
+        {
+            try
+            {
+                string cmd = string.Empty;
+                q.TryDequeue(out cmd);
+                Console.WriteLine("cmd : " + cmd);
+
+                if (cmd == "" || cmd == null)
+                {
+                    return;
+                }
+
+                string currentLine =  serialPort.ReadLine();
+
+                //currentLine = "";
+                //sb.Clear();
+
+                //foreach (char c in Data)
+                //{
+                //    if (c == '\r')
+                //    {
+                //        currentLine = sb.ToString();
+                //        sb.Clear();
+                //    }
+                //    else
+                //    {
+                //        sb.Append(c);
+                //    }
+                //}
+
+                if (cmd.Contains("cm1:run?\r"))     // CM 1 ON/OFF
+                {
+                    modeonoff[(int) mode.CM1_RUN] = currentLine.Contains("ON") ?  true: false;
+                }
+                else if (cmd.Contains("cm2:run?\r"))    // CM 2 ON/OFF
+                {
+                    modeonoff[(int) mode.CM2_RUN] = currentLine.Contains("ON") ? true : false;
+                }
+                else if (cmd.Contains("ps1:run?\r"))    // PS 1 on/off/ocp
+                {
+                    modeonoff[(int) mode.PS1_RUN] = currentLine.Contains("ON") ? true : false;
+                }
+                else if (cmd.Contains("ps2:run?\r"))    // PS 2 on/off/ocp
+                {
+                    modeonoff[(int) mode.PS2_RUN] = currentLine.Contains("ON") ? true : false;
+                }
+                else if (cmd.Contains("cm1:mode?\r"))   // CM 1 HI : A / LO : MA
+                {
+                    modeonoff[(int) mode.CM1_MODE] = currentLine.Contains("HI") ? true : false;
+                }
+                else if (cmd.Contains("cm2:mode?\r"))   // CM 2 HI : A/ LO : MA
+                {
+                    modeonoff[(int) mode.CM2_MODE] = currentLine.Contains("HI") ? true : false;
+                }
+                else if (cmd.Contains("ps1:mode?\r"))   // 1 HI : A / LO : MA
+                {
+                    modeonoff[(int) mode.PS1_MODE] = currentLine.Contains("HI") ? true : false;
+                }
+                else if (cmd.Contains("ps2:mode?\r"))   // 2 HI : A / LO : MA
+                {
+                    modeonoff[(int) mode.PS2_MODE] = currentLine.Contains("HI") ? true : false;
+                }
+                else if (cmd.Contains("ALL:MEAS?\r"))
+                {
+                    if (currentLine == "" || currentLine.Contains("INVALID"))
+                    {
+                        string temp = cmd.Substring(0, cmd.IndexOf('\r'));
+                        logBox.Text += Environment.NewLine;
+                        logBox.AppendText(temp + Environment.NewLine, Color.Blue);
+                        logBox.AppendText("INVALID", Color.Red);
+                        logBox.ScrollToCaret();
+                        //logBox.ScrollToCaret();
+                        return;
+                    }
+
+                    var arr = currentLine.Split(',');
+
+                    if (arr.Length != 3)
+                        return;
+
+                    if (modeonoff[(int) mode.CM1_RUN] == true)
+                    {
+                        //string cm1mease = modeonoff[(int) mode.CM1_MODE] ? "A" : "mA";
+                        string str1 = double.Parse(arr[0]).ToString("F4") + " mA";
+                        str1 = str1[0] == '-' ? str1 : "  " + str1;
+                        cmText.Text = str1;                        
+                    }
+                    else
+                    {
+                        cmText.Text = "-.--- - mA";
+                      
+                    }
+
+                    if (modeonoff[(int) mode.PS1_RUN] == true)
+                    {
+                        double watt = (Double.Parse(arr[1]) * Double.Parse(arr[2]));
+                        setMainText(true, watt, arr[1], arr[2]);
+                    }
+                    else
+                    {
+                        setMainText(false, 0.0, "", "");
+                    }
+
+                    PlotController.executePlotCommand(currentLine);
+
+                }
+                else if (cmd.Contains("output"))
+                {
+                    if (currentLine == "" || currentLine.Contains("INVALID"))
+                    {
+                        logBox.Text += Environment.NewLine;
+                        logBox.AppendText("INVALID", Color.Red);
+                        logBox.ScrollToCaret();
+                        //logBox.ScrollToCaret();
+                        return;
+                    }
+                    logBox.Text += Environment.NewLine;
+                    logBox.AppendText(commandInput.Text + Environment.NewLine, Color.Black);
+                    logBox.AppendText(currentLine, Color.Green);
+                    logBox.ScrollToCaret();
+                    //logBox.ScrollToCaret();
+                }
+                else if (cmd.Contains("VOLT"))
+                {
+                    voltLabel.Text = currentLine + " V";
+                }
+            }
+            catch (Exception ex)
+            {
+                Util.showPopup(this, ex.ToString());
+            }
+        }
+
+        void setMainText(bool isOn, double w, string v, string c)
+        {
+            if (isOn)
+            {
+
+                //wattText.Text = string.Empty;
+
+                //string str1 = w.ToString("0000.0000") + " mW" + Environment.NewLine;
+                //str1 = str1[0] == '-' ? str1 : "  " + str1;
+
+                //string str2 = double.Parse(v).ToString("00.00000") + "  V" + Environment.NewLine;
+                //str2 = str2[0] == '-' ? str2 : "  " + str2;
+
+                //string str3 = double.Parse(c).ToString("0000.0000") + " mA";
+                //str3 = str3[0] == '-' ? str3 : "  " + str3;
+
+                //wattText.Text = str1;
+                //wattText.Text += Environment.NewLine;
+
+                //wattText.Text += str2;
+                //wattText.Text += Environment.NewLine;
+
+                //wattText.Text += str3;
+                v_dot.Visible = true;
+                var ep = w.ToString("F4").Split('.');
+                var volt = double.Parse(v).ToString("F5").Split('.');
+                var ec = double.Parse(c).ToString("F4").Split('.');
+
+                voltageOutLabel.Text = double.Parse(v).ToString("F5") + " V";
+
+                ep1.Text = ep[0]; ep2.Text = ep[1];
+                v1.Text = volt[0]; v2.Text = volt[1];
+                ec1.Text = ec[0]; ec2.Text = ec[1];
+            }
+            else
+            {
+               // wattText.Text = string.Empty;
+
+                if (currentLine.Contains("OCP"))
+                {
+                    //wattText.Text = "-.--- - mW" + Environment.NewLine;
+                    //wattText.Text += Environment.NewLine;
+
+                    //wattText.Text += "OCP TRIP" + Environment.NewLine;
+                    //wattText.Text += Environment.NewLine;
+
+                    //wattText.Text += "-.--- - mA";
+                    v_dot.Visible = false;
+
+                    ep1.Text = "-"; ep2.Text = "--- -";
+                    v1.Text = ""; v2.Text = "OCP TRIP";
+                    voltageOutLabel.Text = "OCP TRIP";
+                    ec1.Text = "-"; ec2.Text = "--- -";
+                }
+                else
+                {
+                    //wattText.Text = "-.--- - mW" + Environment.NewLine;
+                    //wattText.Text += Environment.NewLine;
+
+                    //wattText.Text += "--.--- -- V" + Environment.NewLine;
+                    //wattText.Text += Environment.NewLine;
+
+                    //wattText.Text += "-.--- - mA";
+
+                    ep1.Text = "-"; ep2.Text = "--- -";
+                    v1.Text = "--"; v2.Text = "--- --";
+                    voltageOutLabel.Text = "--. --- -- V";
+                    ec1.Text = "-"; ec2.Text = "--- -";
+                }
+            }
+        }
+        void disconnectCOM()
+        {
+            if (serialPort.IsOpen)  //시리얼포트가 열려 있으면
+            {
+
+                serialPort.DataReceived -= serialPort_DataReceived;
+                serialPort.DiscardInBuffer();
+                serialPort.DiscardOutBuffer();
+                serialPort.Close();  //시리얼포트 닫기
+
+                //label_status.Text = "포트가 닫혔습니다.";
+                //comboBox_port.Enabled = true;  //COM포트설정 콤보박스 활성화
+                logBox.Text += Environment.NewLine;
+                logBox.AppendText("CLOSED : " + serialPort.PortName, Color.Red);
+                logBox.ScrollToCaret();
+
+                connect_button.Enabled = true;
+                disconnect_button.Enabled = false;
+            }
+            else  //시리얼포트가 닫혀 있으면
+            {
+                //label_status.Text = "포트가 이미 닫혀 있습니다.";                
+            }
+        }
+
+        void disconnectIP()
+        {
+            isIPstart = false;
+            client.GetStream().Close();
+            client.Close();
+            disconnect_button.Enabled = false;
+            connect_button.Enabled = true;
+            //send_button.Enabled = false;
+        }
+        private void button_disconnect_Click(object sender, EventArgs e)
+        {            
+            if (isCom)
+            {
+                disconnectCOM();
+            }
+            else if (isIP)
+            {
+                disconnectIP();
+            }                  
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            comboBox_port.DataSource = SerialPort.GetPortNames(); //연결 가능한 시리얼포트 이름을 콤보박스에 가져오기 
+        }
+
+        private void keypad_Click(object sender, EventArgs e)
+        {
+            var button = (Button)sender;
+            
+            bool isnum = button.Text.IsNumber();
+
+            if (isnum || button.Text.Equals("."))
+            {
+                Console.WriteLine("number : " + button.Text);
+                if (numpadTextBox.Text.Length > 9) return;
+                numpadTextBox.Text += button.Text;
+            }
+            else 
+            {
+                Console.WriteLine("not number : " + button.Text);
+
+                if (button.Text.Equals("<") && numpadTextBox.Text.Length > 0)
+                {
+                    numpadTextBox.Text = numpadTextBox.Text.Substring(0, numpadTextBox.Text.Length - 1);
+                }
+                else if (button.Text.Equals("ENT"))
+                {
+                    double num = -1.0;
+                    double.TryParse(numpadTextBox.Text, out num);
+
+                    if (numpadTextBox.Text.Equals("") || num < 0) return;
+
+                    if (num <= 0 || num > 16)
+                    {
+                        Util.showPopup(this, "INVALID NUMBER");
+                        return;
+                    }
+
+                    if (isCom)
+                    {
+                        string cmd = ("PS#:VOLT ").Replace('#', '1');
+                        cmd += numpadTextBox.Text;
+                        tq.Enqueue(new Tuple<string, string>("output", cmd));
+                    }
+                    else if (isIP)
+                    {
+                        //PS<CH>:VOLT<space> < 1.5~16 >
+                        Task.Factory.StartNew(async () =>
+                        {
+                            string cmd = ("PS#:VOLT ").Replace('#', '1');
+                            cmd += numpadTextBox.Text;
+                            string message = "CMD;" + cmd + '\r';
+                            q.Enqueue(message);
+                        });
+                    }
+                }
+            }
+        }
+
+        private void ipradio_CheckedChanged(object sender, EventArgs e)
+        {
+            if (comradio.Checked)
+            {
+                isCom = true;
+                isIP = false;
+            }
+            else
+            {
+                isCom = false;
+                isIP = true;
+            }
+        }
+
+        private void START1_Click(object sender, EventArgs e)
+        {
+            PlotController.start1_Click(this, e);
+        }
+
+        private void STOP1_Click(object sender, EventArgs e)
+        {
+            PlotController.stop1_Click(this, e);
+        }
+
+        private void START2_Click(object sender, EventArgs e)
+        {
+            PlotController.start2_Click(this, e);
+        }
+
+        private void STOP2_Click(object sender, EventArgs e)
+        {
+            PlotController.stop2_Click(this, e);
+        }
+
+        private void comradio_CheckedChanged(object sender, EventArgs e)
+        {
+            if (ipradio.Checked)
+            {
+                isCom = false;
+                isIP = true;
+            }
+            else
+            {
+                isCom = true;
+                isIP = false;
+            }
+        }
+    }   
+}

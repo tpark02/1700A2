@@ -1,0 +1,39 @@
+﻿using ScottPlot;
+using ScottPlot.Plottable;
+using System.Windows.Forms;
+
+namespace _1700A_GUI
+{
+    public partial class PlotController : Form1
+    {
+        SignalPlot SignalPlot, SignalPlot2, SignalPlot3;
+        readonly double[] Values = new double[100000];
+        readonly double[] Values2 = new double[100000];
+        readonly double[] Values3 = new double[100000];
+
+        public void init()
+        {
+            // plot1
+            //FormPlot.Plot.SetAxisLimits(0, 1, minLimitY, maxLimitY);
+            SignalPlot = FormPlot.Plot.PlotSignal(Values);
+            SignalPlot.YAxisIndex = FormPlot.Plot.LeftAxis.AxisIndex;
+            FormPlot.Plot.LeftAxis.Ticks(true);
+            FormPlot.Plot.Width = 1060;
+
+            FormPlot.Refresh();
+
+            // plot2
+            // FormPlot2.Plot.SetAxisLimits(0, 1, minLimitY2, maxLimitY2);
+            SignalPlot2 = FormPlot2.Plot.PlotSignal(Values2);
+            SignalPlot2.YAxisIndex = FormPlot2.Plot.LeftAxis.AxisIndex;
+
+            SignalPlot3 = FormPlot2.plt.PlotSignal(Values3);
+            SignalPlot3.YAxisIndex = FormPlot2.Plot.RightAxis.AxisIndex;
+            FormPlot2.Plot.RightAxis.Ticks(true);
+
+            FormPlot2.Plot.Width = 1060;
+
+            FormPlot2.Refresh();
+        }
+    }
+}

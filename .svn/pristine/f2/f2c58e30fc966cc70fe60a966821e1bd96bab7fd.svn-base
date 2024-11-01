@@ -1,0 +1,52 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace _1700A_GUI
+{
+    public static class StringExtension
+    {
+        /// <summary>
+        /// True if all characters in a string is IsDigit(true), False if not
+        /// </summary>
+        /// <param name="me"></param>
+        /// <returns></returns>
+        public static bool IsNumber(this string me)
+        {
+            foreach (char ch in me)
+            {
+                if (!Char.IsDigit(ch))
+                    return false;
+            }
+
+            return true;
+        }
+    }
+    public static class RichTextBoxExtensions
+    {
+        public static void AppendText(this RichTextBox box, string text, Color color)
+        {
+            box.SelectionStart = box.TextLength;
+            box.SelectionLength = 0;
+
+            box.SelectionColor = color;
+            box.AppendText(text);
+            box.SelectionColor = box.ForeColor;
+        }
+    }
+
+    public static class Util
+    {
+        public static void showPopup(IWin32Window owner, string s)
+        {
+            Console.Write(s);
+            var msg = new msgpopup();
+            msg.msglabel.Text = s;
+            msg.ShowDialog(owner);
+        }
+    }
+}
